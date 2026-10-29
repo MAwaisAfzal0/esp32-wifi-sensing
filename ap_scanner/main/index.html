@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ESP32 access point</title>
+<style>
+  :root{
+    --bg:#0a0d12; --panel:#121821; --line:#1f2937; --ink:#e6edf5;
+    --dim:#7d8b9e; --accent:#4fd1c5; --warn:#f0b429; --bad:#ef5350; --good:#3ddc97;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:14px/1.45 ui-sans-serif,system-ui,"Segoe UI",Roboto,sans-serif}
+  header{position:sticky;top:0;z-index:5;background:rgba(10,13,18,.92);
+         backdrop-filter:blur(8px);border-bottom:1px solid var(--line);padding:14px 20px}
+  .row{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+  h1{margin:0;font-size:16px;font-weight:600}
+  h1 span{color:var(--accent)}
+  .stat{font-size:12px;color:var(--dim)}
+  .stat b{color:var(--ink);font-weight:600}
+  .mono{font-family:ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace}
+  button{background:var(--accent);color:#04211e;border:0;padding:8px 14px;border-radius:8px;
+         font-weight:600;cursor:pointer;transition:transform .08s,filter .15s}
+  button:hover{filter:brightness(1.1)} button:active{transform:scale(.97)}
+  main{padding:18px 20px 40px;display:grid;gap:18px;max-width:1100px;margin:0 auto}
+  section{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  section h2{margin:0;padding:12px 16px;font-size:12px;text-transform:uppercase;
+             letter-spacing:.12em;color:var(--dim);border-bottom:1px solid var(--line);
+             display:flex;justify-content:space-between;align-items:center;gap:12px}
+  h2 em{font-style:normal;color:var(--ink)}
+  .sum{margin-left:auto;font-size:11px;letter-spacing:0;text-transform:none;color:var(--accent)}
+  h2 button{font-size:11px;padding:5px 10px;text-transform:none;letter-spacing:0}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th{text-align:left;font-weight:500;color:var(--dim);font-size:11%;font-size:11px;
+     text-transform:uppercase;letter-spacing:.08em;padding:8px 16px;border-bottom:1px solid var(--line)}
+  td{padding:8px 16px;border-bottom:1px solid rgba(31,41,55,.55);white-space:nowrap}
+  tr:last-child td{border-bottom:0}
+  tbody tr:hover{background:rgba(79,209,197,.05)}
+  .r{text-align:right} .c{text-align:center}
+  .sig{display:inline-block;width:56px;height:6px;border-radius:3px;background:#22303f;
+       overflow:hidden;vertical-align:middle;margin-right:8px}
+  .sig i{display:block;height:100%}
+  .ok{color:var(--good)} .mid{color:var(--warn)} .lo{color:var(--bad)}
+  .tag{font-size:11px;padding:1px 7px;border-radius:99px;border:1px solid var(--line);color:var(--dim)}
+  .dev{font-weight:600}
+  .muted{color:var(--dim)}
+  .empty{padding:18px 16px;color:var(--dim);font-size:13px}
+  footer{color:var(--dim);font-size:11px;text-align:center;padding:0 20px 24px;line-height:1.6}
+</style>
+</head>
+<body>
+<header>
+  <div class="row">
+    <h1>ESP32 <span>access point</span></h1>
+    <div class="stat">network <b id="ssid">–</b></div>
+    <div class="stat">page <b>192.168.4.1</b></div>
+    <div class="stat"><b id="count">0</b> connected</div>
+    <div class="stat">channel <b id="ch">–</b></div>
+    <div class="stat">heap <b id="heap">–</b></div>
+  </div>
+</header>
+
+<main>
+  <section>
+    <h2><span>Devices on this network</span></h2>
+    <table>
+      <thead><tr><th>Device</th><th>MAC</th><th class="c">Status</th><th class="r">Signal</th></tr></thead>
+      <tbody id="devs"><tr><td colspan="4" class="empty">waiting for something to join…</td></tr></tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2><span>Devices heard, by channel</span><span class="sum" id="devsum"></span>
+      <button id="sweep">Sweep all channels</button></h2>
+    <table>
+      <thead><tr><th>Ch</th><th>Device</th><th>MAC</th><th class="c">Frames</th><th class="r">Signal</th></tr></thead>
+      <tbody id="sdevs"><tr><td colspan="5" class="empty">press Sweep — this network drops for about 20 seconds</td></tr></tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2><span>Nearby networks</span><span class="sum" id="chsum"></span>
+      <button id="scan">Scan all channels</button></h2>
+    <table>
+      <thead><tr><th>SSID</th><th>BSSID</th><th>Ch</th><th>Security</th><th class="r">Signal</th></tr></thead>
+      <tbody id="nets"><tr><td colspan="5" class="empty">scanning all 13 channels…</td></tr></tbody>
+    </table>
+  </section>
+</main>
+<footer>
+  This board is the access point, so it holds each client's key and can read their DHCP and mDNS payloads —
+  which is why a name is possible here and not from a passive sniffer on someone else's WPA2 network.
+</footer>
+
+<script>
+const $ = id => document.getElementById(id);
+let timer = null;
+
+function dbm(r){
+  const cls = r >= -60 ? 'ok' : r >= -75 ? 'mid' : 'lo';
+  const pct = Math.max(4, Math.min(100, 2 * (r + 100)));
+  const color = cls==='ok' ? '#3ddc97' : cls==='mid' ? '#f0b429' : '#ef5350';
+  return `<span class="sig"><i style="width:${pct}%;background:${color}"></i></span>` +
+         `<span class="${cls}">${r} dBm</span>`;
+}
+const sec = a => a.includes('WPA3') ? 'WPA3' : a.includes('WPA2') ? 'WPA2' :
+                 a.includes('WPA') ? 'WPA' : a.includes('WEP') ? 'WEP' : 'open';
+
+function devCell(d){
+  if (d.name) return `<span class="dev">${d.name}</span>`;
+  if (d.vendor === 'random') return `<span class="tag">private address</span>`;
+  if (d.vendor) return `<span class="muted">${d.vendor}</span>`;
+  return `<span class="muted">unknown device</span>`;
+}
+
+const KIND = ['data', 'probe', 'mgmt', 'ctrl'];
+
+function sweepCell(s){
+  const wants = s.probe ? ` <span class="tag">→ ${s.probe}</span>` : '';
+  if (s.name) return `<span class="dev">${s.name}</span>${wants}`;
+  if (s.vendor && s.vendor !== 'random') return `<span class="dev">${s.vendor}</span>${wants}`;
+  if (s.probe) return `<span class="tag">private</span>${wants}`;
+  if (s.vendor === 'random') return `<span class="tag">private address</span>`;
+  return `<span class="muted">unknown</span>`;
+}
+
+function renderSweep(d){
+  const list = d.sdev.slice().sort((a,b) => a.ch - b.ch || b.rssi - a.rssi);
+  if (d.surveying) {
+    $('devsum').textContent = 'sweeping…';
+    return;
+  }
+  if (!list.length) return;
+
+  $('sdevs').innerHTML = list.map(s => `<tr>
+      <td class="c">${s.ch}</td>
+      <td>${sweepCell(s)}</td>
+      <td class="mono">${s.mac}</td>
+      <td class="c">${s.hits} <span class="tag">${KIND[s.kind] || '?'}</span></td>
+      <td class="r">${dbm(s.rssi)}</td></tr>`).join('');
+
+  const byCh = {};
+  list.forEach(s => byCh[s.ch] = (byCh[s.ch] || 0) + 1);
+  const parts = Object.keys(byCh).sort((a,b) => a-b).map(c => `ch${c}: ${byCh[c]}`);
+  $('devsum').textContent = parts.join('  ·  ') + (d.survey_age >= 0 ? `  (${d.survey_age}s ago)` : '');
+}
+
+function render(d){
+  $('ssid').textContent = d.ap.ssid;
+  $('ch').textContent = d.ap.ch;
+  $('heap').textContent = (d.heap/1024).toFixed(0) + ' KB';
+  $('count').textContent = d.devices.length;
+
+  $('devs').innerHTML = d.devices.length ? d.devices.map(x => `<tr>
+      <td>${devCell(x)}</td>
+      <td class="mono">${x.mac}</td>
+      <td class="c"><span class="tag">${x.connected ? 'connected' : 'seen'}</span></td>
+      <td class="r">${dbm(x.rssi)}</td></tr>`).join('')
+    : '<tr><td colspan="4" class="empty">waiting for something to join…</td></tr>';
+
+  if (d.net.length) {
+    const sorted = d.net.slice().sort((a,b) => a.ch - b.ch || b.rssi - a.rssi);
+    $('nets').innerHTML = sorted.map(n => `<tr>
+      <td>${n.ssid || '<span class="tag">hidden</span>'}</td>
+      <td class="mono">${n.bssid}</td>
+      <td class="c">${n.ch}</td>
+      <td><span class="tag">${sec(n.auth)}</span></td>
+      <td class="r">${dbm(n.rssi)}</td></tr>`).join('');
+
+    const byCh = {};
+    sorted.forEach(n => byCh[n.ch] = (byCh[n.ch] || 0) + 1);
+    const parts = Object.keys(byCh).sort((a,b) => a-b).map(c => `ch${c}: ${byCh[c]}`);
+    $('chsum').textContent = parts.join('  ·  ');
+  }
+
+  renderSweep(d);
+}
+
+async function tick(){
+  try {
+    const r = await fetch('/api/data', {cache:'no-store'});
+    render(await r.json());
+  } catch(e) { $('count').textContent = '?'; }
+}
+function start(){ clearInterval(timer); timer = setInterval(tick, 2000); tick(); }
+
+$('scan').onclick = async () => {
+  $('scan').textContent = 'scanning…';
+  try { await fetch('/api/scan'); } catch(e) {}
+  setTimeout(() => { $('scan').textContent = 'Scan all channels'; }, 4000);
+};
+$('sweep').onclick = async () => {
+  $('sweep').textContent = 'sweeping…';
+  $('devsum').textContent = 'network drops while the radio hops';
+  try { await fetch('/api/survey'); } catch(e) {}
+  setTimeout(() => { $('sweep').textContent = 'Sweep all channels'; }, 25000);
+};
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) { clearInterval(timer); timer = null; }
+  else if (!timer) start();
+});
+start();
+</script>
+</body>
+</html>

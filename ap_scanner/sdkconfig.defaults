@@ -1,0 +1,23 @@
+# --- target ---
+CONFIG_IDF_TARGET="esp32"
+
+# --- Wi-Fi: the board is the access point here, no station connection ---
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=64
+CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=32
+CONFIG_ESP_WIFI_SOFTAP_SUPPORT=y
+
+# --- console / flashing link ---
+# 460800: this CH340 link already corrupted a bulk 921600 read on this machine.
+CONFIG_ESP_CONSOLE_UART_CUSTOM=y
+CONFIG_ESP_CONSOLE_UART_CUSTOM_NUM_0=y
+CONFIG_ESP_CONSOLE_UART_BAUDRATE=460800
+
+# 4 MB flash on the WROOM-32; the 2 MB default leaves the upper half unaddressable.
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="4MB"
+
+# --- timing / misc ---
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=30
+CONFIG_FREERTOS_HZ=1000
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+CONFIG_ESP32_DEFAULT_CPU_FREQ_240=y

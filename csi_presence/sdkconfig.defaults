@@ -1,0 +1,36 @@
+# --- target ---
+CONFIG_IDF_TARGET="esp32"
+
+# --- Wi-Fi CSI ---
+# IDF 5.3 renamed ESP32_WIFI_* -> ESP_WIFI_*. Upstream sdkconfig.defaults still uses the
+# old names, which Kconfig silently drops; CSI would then never enable and the board would
+# emit zero CSI_DATA rows.
+CONFIG_ESP_WIFI_CSI_ENABLED=y
+CONFIG_ESP_WIFI_AMPDU_TX_ENABLED=
+CONFIG_ESP_WIFI_AMPDU_RX_ENABLED=
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=128
+CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=32
+
+# --- console / flashing link ---
+# 460800 rather than the example's 921600: this CH340 link already corrupted a bulk
+# 921600 read on this machine. See CONFIG_SEND_FREQUENCY in main/app_main.c.
+# UART_DEFAULT pins the console to 115200 and ignores the baudrate symbol entirely;
+# CUSTOM is the only path that honours it. ESPTOOLPY_MONITOR_BAUD then follows
+# automatically (default ESP_CONSOLE_UART_BAUDRATE if ESP_CONSOLE_UART).
+CONFIG_ESP_CONSOLE_UART_CUSTOM=y
+CONFIG_ESP_CONSOLE_UART_CUSTOM_NUM_0=y
+CONFIG_ESP_CONSOLE_UART_BAUDRATE=460800
+
+# 4 MB flash (ESP32-WROOM-32); the 2 MB default leaves the upper half unaddressable.
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="4MB"
+
+# --- credentials: never baked into the image or this file ---
+# Board prompts for SSID/password over the serial console at boot.
+CONFIG_EXAMPLE_WIFI_SSID_PWD_FROM_STDIN=y
+
+# --- timing / misc ---
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=30
+CONFIG_FREERTOS_HZ=1000
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+CONFIG_ESP32_DEFAULT_CPU_FREQ_240=y

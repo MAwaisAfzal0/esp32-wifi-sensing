@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ESP32 Wi-Fi scanner</title>
+<style>
+  :root{
+    --bg:#0a0d12; --panel:#121821; --line:#1f2937; --ink:#e6edf5;
+    --dim:#7d8b9e; --accent:#4fd1c5; --warn:#f0b429; --bad:#ef5350; --good:#3ddc97;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:14px/1.45 ui-sans-serif,system-ui,"Segoe UI",Roboto,sans-serif}
+  header{position:sticky;top:0;z-index:5;background:rgba(10,13,18,.92);
+         backdrop-filter:blur(8px);border-bottom:1px solid var(--line);padding:14px 20px}
+  .row{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+  h1{margin:0;font-size:16px;font-weight:600;letter-spacing:.2px}
+  h1 span{color:var(--accent)}
+  .stat{font-size:12px;color:var(--dim)}
+  .stat b{color:var(--ink);font-weight:600}
+  .mono{font-family:ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace}
+  button{margin-left:auto;background:var(--accent);color:#04211e;border:0;
+         padding:8px 14px;border-radius:8px;font-weight:600;cursor:pointer;
+         transition:transform .08s ease,filter .15s}
+  button:hover{filter:brightness(1.1)} button:active{transform:scale(.97)}
+  button.ghost{background:transparent;color:var(--dim);border:1px solid var(--line);font-weight:500}
+  main{padding:18px 20px 40px;display:grid;gap:18px;max-width:1200px;margin:0 auto}
+  section{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  section h2{margin:0;padding:12px 16px;font-size:12px;text-transform:uppercase;
+             letter-spacing:.12em;color:var(--dim);border-bottom:1px solid var(--line);
+             display:flex;justify-content:space-between}
+  h2 em{font-style:normal;color:var(--ink)}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th{text-align:left;font-weight:500;color:var(--dim);font-size:11px;
+     text-transform:uppercase;letter-spacing:.08em;padding:8px 16px;
+     border-bottom:1px solid var(--line)}
+  td{padding:7px 16px;border-bottom:1px solid rgba(31,41,55,.55);white-space:nowrap}
+  tr:last-child td{border-bottom:0}
+  tbody tr:hover{background:rgba(79,209,197,.05)}
+  .r{text-align:right} .c{text-align:center}
+  .sig{display:inline-block;width:60px;height:6px;border-radius:3px;background:#22303f;
+       overflow:hidden;vertical-align:middle;margin-right:8px}
+  .sig i{display:block;height:100%;border-radius:3px}
+  .ok{color:var(--good)} .mid{color:var(--warn)} .lo{color:var(--bad)}
+  .tag{font-size:11px;padding:1px 7px;border-radius:99px;border:1px solid var(--line);color:var(--dim)}
+  .dev{font-weight:600}
+  .muted{color:var(--dim)}
+  .empty{padding:18px 16px;color:var(--dim);font-size:13px}
+  footer{color:var(--dim);font-size:11px;text-align:center;padding:0 20px 24px}
+</style>
+</head>
+<body>
+<header>
+  <div class="row">
+    <h1>ESP32 <span>Wi-Fi scanner</span></h1>
+    <div class="stat" id="link">connecting…</div>
+    <div class="stat">channel <b id="ch">–</b></div>
+    <div class="stat">heap <b id="heap">–</b></div>
+    <div class="stat">scan <b id="age">–</b> ago</div>
+    <button id="scan">Scan now</button>
+    <button id="pause" class="ghost">Pause</button>
+  </div>
+</header>
+
+<main>
+  <section>
+    <h2><span>Networks in range</span><em id="ncount">–</em></h2>
+    <table>
+      <thead><tr><th>SSID</th><th>BSSID</th><th>Ch</th><th>Security</th><th class="r">Signal</th></tr></thead>
+      <tbody id="nets"><tr><td colspan="5" class="empty">scanning…</td></tr></tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2><span>Devices on channel <em id="cchn">–</em></span><em id="ccount">–</em></h2>
+    <table>
+      <thead><tr><th>Device</th><th>MAC</th><th>Type</th><th class="c">Frames</th><th class="c">Seen</th><th class="r">Signal</th></tr></thead>
+      <tbody id="devs"><tr><td colspan="6" class="empty">listening…</td></tr></tbody>
+    </table>
+  </section>
+</main>
+<footer>APs come from a full scan across all 13 channels. Devices are whatever transmits on this one channel — one radio, one channel at a time.</footer>
+
+<script>
+const $ = id => document.getElementById(id);
+let paused = false, timer = null;
+
+function dbm(r){
+  const cls = r >= -60 ? 'ok' : r >= -75 ? 'mid' : 'lo';
+  const pct = Math.max(4, Math.min(100, 2 * (r + 100)));
+  return `<span class="sig"><i class="${cls==='ok'?'ok':''}" style="width:${pct}%;background:${
+    cls==='ok'?'#3ddc97':cls==='mid'?'#f0b429':'#ef5350'}"></i></span>` +
+    `<span class="${cls}">${r} dBm</span>`;
+}
+const sec = a => a.includes('WPA3') ? 'WPA3' : a.includes('WPA2') ? 'WPA2' :
+                 a.includes('WPA') ? 'WPA' : a.includes('WEP') ? 'WEP' : 'open';
+
+function render(d){
+  $('link').innerHTML = d.sta ? `linked <b>${d.sta.ip}</b> · ${d.sta.ssid}` : 'not connected';
+  $('ch').textContent = d.sta ? d.sta.ch : '–';
+  $('heap').textContent = (d.heap/1024).toFixed(0) + ' KB';
+  $('age').textContent = d.scan_age + 's';
+  $('ncount').textContent = d.ap.length + ' found';
+  $('cchn').textContent = d.sta ? d.sta.ch : '–';
+  $('ccount').textContent = d.clients.length + ' seen';
+
+  $('nets').innerHTML = d.ap.length ? d.ap.map(a => `<tr>
+      <td>${a.ssid || '<span class="tag">hidden</span>'}</td>
+      <td class="mono">${a.bssid}</td>
+      <td class="c">${a.ch}</td>
+      <td><span class="tag">${sec(a.auth)}</span></td>
+      <td class="r">${dbm(a.rssi)}</td></tr>`).join('')
+    : '<tr><td colspan="5" class="empty">no networks found</td></tr>';
+
+  $('devs').innerHTML = d.clients.length ? d.clients.map(c => `<tr>
+      <td>${devCell(c)}</td>
+      <td class="mono">${c.mac}</td>
+      <td><span class="tag">${c.kind}</span></td>
+      <td class="c">${c.frames}</td>
+      <td class="c">${c.age}s</td>
+      <td class="r">${dbm(c.rssi)}</td></tr>`).join('')
+    : '<tr><td colspan="6" class="empty">nothing transmitting on this channel right now</td></tr>';
+}
+
+function devCell(c){
+  if (c.ap)    return `<span class="dev">${c.name || 'access point'}</span> <span class="tag">AP</span>`;
+  if (c.name)  return `<span class="dev">${c.name}</span>`;
+  if (c.vendor === 'random') return `<span class="tag">private address</span>`;
+  if (c.vendor) return `<span class="muted">${c.vendor}</span>`;
+  return `<span class="muted">unknown</span>`;
+}
+
+async function tick(){
+  if (paused) return;
+  try {
+    const r = await fetch('/api/data', {cache:'no-store'});
+    render(await r.json());
+  } catch(e) {
+    $('link').textContent = 'connection lost';
+  }
+}
+function start(){ clearInterval(timer); timer = setInterval(tick, 2000); tick(); }
+
+$('scan').onclick = async () => {
+  $('scan').textContent = 'scanning…';
+  try { await fetch('/api/scan'); } catch(e) {}
+  setTimeout(() => { $('scan').textContent = 'Scan now'; }, 4000);
+};
+$('pause').onclick = () => {
+  paused = !paused;
+  $('pause').textContent = paused ? 'Resume' : 'Pause';
+  if (!paused) tick();
+};
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) { clearInterval(timer); timer = null; }
+  else if (!timer) start();
+});
+start();
+</script>
+</body>
+</html>

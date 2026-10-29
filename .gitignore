@@ -1,0 +1,21 @@
+# ESP-IDF build artefacts
+build/
+managed_components/
+sdkconfig
+sdkconfig.old
+dependencies.lock
+
+# firmware images
+*.bin
+*.elf
+*.map
+
+# python
+__pycache__/
+*.pyc
+
+# editors / os
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
